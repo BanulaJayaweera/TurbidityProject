@@ -1,0 +1,9 @@
+# Virtual environment
+.venv-turbidity/
+
+# Large processed data directories
+PROCESSED_DATA/
+PROCESSED_DATA_2/
+PROCESSED_DATA_3/
+PROCESSED_DATA_4/
+PROCESSED_DATA_PAPER/
