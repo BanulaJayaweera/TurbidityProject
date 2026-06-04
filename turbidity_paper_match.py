@@ -237,7 +237,7 @@ class NpyDataGenerator(tf.keras.utils.Sequence):
 
     def __getitem__(self, idx):
         bi = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
-        X  = np.array([np.load(self.file_paths[i]) for i in bi])
+        X  = np.array([np.load(str(self.file_paths[i])) for i in bi])
         y  = self.labels[bi]
         if self.augment:
             X = self._augment(X)
@@ -398,7 +398,7 @@ if __name__ == "__main__":
 
         # Paper trains for 10 epochs (formazine) but we allow up to 50 with early stop
         print(f"\n  Training {ds_name}...")
-        model.fit(train_gen, epochs=20, validation_data=val_gen, callbacks=callbacks)
+        model.fit(train_gen, epochs=40, validation_data=val_gen, callbacks=callbacks)
 
         # Save
         safe = ds_name.replace(' ', '_')
