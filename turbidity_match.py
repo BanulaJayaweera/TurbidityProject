@@ -8,23 +8,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
 # ==========================================
-# Phase 1: Preprocessor — Faithful to Paper
+# Phase 1: Preprocessor
 # ==========================================
 class TurbidityPreprocessor:
-    """
-    Faithfully implements Section 3.3 of the paper:
-    a) Crop bottom (remove container feet)
-    b) Enhance brightness
-    c) Morphological ops (opening + closing)
-    d) Filter contours by area (dot) or merge all (text)
-    e) Tight bounding rect + 100px padding
-    f) Normalise: mean = centre of dot area, variance = cropped rect std
-    g) Two crops:
-         - Dot:  upper edge crop  AND  lower edge crop (symmetric)
-         - Text: top half ("The quick brown fox") AND bottom half ("jumps over the lazy dog")
-    """
 
-    # Paper uses 244x244 for dot datasets, 200x200 for text
     SIZE_MAP = {"dot": (244, 244), "text": (200, 200)}
 
     def __init__(self, pattern_type="dot"):
@@ -65,9 +52,6 @@ class TurbidityPreprocessor:
     # ------------------------------------------------------------------
     def _crop_bottom(self, image, bottom_crop_pixels=600):
         h = image.shape[0]
-        # Skip crop if image is already small (already pre-cropped)
-        if h <= 800:
-            return image
         return image[:max(1, h - bottom_crop_pixels), :]
 
     def _enhance_brightness(self, image, alpha=1.2, beta=30):
@@ -101,16 +85,15 @@ class TurbidityPreprocessor:
                 return fallback
             x, y, w, h = cv2.boundingRect(best)
         else:
-            # d) text: merge all contours above noise threshold
             valid = [c for c in contours if cv2.contourArea(c) > 20]
             if not valid:
                 return fallback
-            xs = [cv2.boundingRect(c)[0] for c in valid]
-            ys = [cv2.boundingRect(c)[1] for c in valid]
-            x2s = [cv2.boundingRect(c)[0] + cv2.boundingRect(c)[2] for c in valid]
-            y2s = [cv2.boundingRect(c)[1] + cv2.boundingRect(c)[3] for c in valid]
-            x, y = min(xs), min(ys)
-            w, h = max(x2s) - x, max(y2s) - y
+            rects = [cv2.boundingRect(c) for c in valid]
+            x  = min(r[0]        for r in rects)
+            y  = min(r[1]        for r in rects)
+            x2 = max(r[0] + r[2] for r in rects)
+            y2 = max(r[1] + r[3] for r in rects)
+            w, h = x2 - x, y2 - y
 
         # e) 100px padding on all sides
         pad = 100
@@ -124,11 +107,6 @@ class TurbidityPreprocessor:
         return roi.astype(np.float32) / 255.0
 
     def _final_crops(self, norm_roi):
-        """
-        Paper Section 3.3g:
-        Dot  → crop centred on UPPER EDGE of dot  +  crop centred on LOWER EDGE (symmetric)
-        Text → top half  +  bottom half
-        """
         h, w = norm_roi.shape[:2]
 
         if self.pattern_type == "dot":
@@ -200,10 +178,11 @@ def split_and_process_individual_datasets(base_dir, output_dir, datasets):
         for split_name, paths, labels in [("train", X_train, y_train),
                                            ("val",   X_val,   y_val),
                                            ("test",  X_test,  y_test)]:
+            for label in set(labels):
+                os.makedirs(os.path.join(output_dir, ds_name, split_name, label), exist_ok=True)
             ok, fail = 0, 0
             for path, label in zip(paths, labels):
                 out_dir = os.path.join(output_dir, ds_name, split_name, label)
-                os.makedirs(out_dir, exist_ok=True)
                 base = os.path.splitext(os.path.basename(path))[0]
                 try:
                     c1, c2 = processor.process(path)
@@ -244,18 +223,14 @@ class NpyDataGenerator(tf.keras.utils.Sequence):
         return X, y
 
     def _augment(self, X):
-        out = []
-        for img in X:
-            # Vertical flip: dot can be top or bottom
-            if np.random.rand() > 0.5:
-                img = np.flipud(img)
-            # Horizontal flip: symmetric pattern
-            if np.random.rand() > 0.5:
-                img = np.fliplr(img)
-            # Mild brightness jitter ±10%
-            img = np.clip(img * (1.0 + np.random.uniform(-0.1, 0.1)), 0, 1)
-            out.append(img)
-        return np.array(out)
+        X = X.copy()
+        n = len(X)
+        vflip = np.random.rand(n) > 0.5
+        X[vflip] = X[vflip, ::-1, :, :]
+        hflip = np.random.rand(n) > 0.5
+        X[hflip] = X[hflip, :, ::-1, :]
+        factors = 1.0 + np.random.uniform(-0.1, 0.1, size=(n, 1, 1, 1))
+        return np.clip(X * factors, 0, 1).astype(np.float32)
 
     def on_epoch_end(self):
         if self.shuffle:
@@ -275,17 +250,9 @@ def get_paths_and_labels(folder_path):
 
 
 # ==========================================
-# Phase 4: Paper's Exact CNN Architecture
+# Phase 4: CNN Architecture
 # ==========================================
-def build_paper_cnn(input_shape, num_classes):
-    """
-    Section 3.4 of the paper:
-    - 5 conv layers: depths 16, 32, 64, 128, 256
-    - kernel 3x3, ReLU
-    - AveragePooling2D between every conv layer   ← NOT MaxPooling
-    - Classification head: Dense(num_classes) + Softmax
-    - AveragePooling preserves the soft blur gradient that IS the turbidity signal
-    """
+def build_cnn(input_shape, num_classes):
     inp = layers.Input(shape=input_shape)
 
     x = layers.Conv2D(16,  (3,3), activation='relu', padding='same')(inp)
@@ -309,7 +276,7 @@ def build_paper_cnn(input_shape, num_classes):
 
     model = models.Model(inp, out)
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, decay=0.001),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
         loss='sparse_categorical_crossentropy',
         metrics=['accuracy']
     )
@@ -321,7 +288,7 @@ def build_paper_cnn(input_shape, num_classes):
 # ==========================================
 if __name__ == "__main__":
     BASE_DIR      = "."
-    PROCESSED_DIR = "./PROCESSED_DATA_PAPER"
+    PROCESSED_DIR = "./PROCESSED_DATA"
 
     # Match paper's dataset names exactly — adjust these to your actual folder names
     DATASETS = {
@@ -384,7 +351,7 @@ if __name__ == "__main__":
         target_size = TurbidityPreprocessor.SIZE_MAP.get(pattern, (244, 244))
         input_shape = (*target_size, 3)
 
-        model = build_paper_cnn(input_shape, len(unique_sorted))
+        model = build_cnn(input_shape, len(unique_sorted))
         model.summary()
 
         callbacks = [
@@ -402,23 +369,22 @@ if __name__ == "__main__":
 
         # Save
         safe = ds_name.replace(' ', '_')
-        model.save(f"model_{safe}_paper.keras")
-        np.save(f"classes_{safe}_paper.npy", encoder.classes_)
-        print(f"  Saved model_{safe}_paper.keras")
+        model.save(f"model_{safe}.keras")
+        np.save(f"classes_{safe}.npy", encoder.classes_)
+        print(f"  Saved model_{safe}.keras")
 
-        # Evaluate
         print(f"\n  Final test evaluation: {ds_name}")
-        _, test_acc = model.evaluate(test_gen, verbose=1)
-        print(f"  >>> {ds_name} Exact Accuracy:        {test_acc*100:.2f}% <<<")
-
-        # Within-1-class accuracy (useful for near-misses on ordered NTU scale)
         all_pred, all_true = [], []
         for i in range(len(test_gen)):
             xb, yb = test_gen[i]
             preds = np.argmax(model.predict(xb, verbose=0), axis=-1)
-            all_pred.extend(preds); all_true.extend(yb)
-        all_pred = np.array(all_pred); all_true = np.array(all_true)
+            all_pred.extend(preds)
+            all_true.extend(yb)
+        all_pred = np.array(all_pred)
+        all_true = np.array(all_true)
+        test_acc = np.mean(all_pred == all_true)
         w1 = np.mean(np.abs(all_pred - all_true) <= 1)
+        print(f"  >>> {ds_name} Exact Accuracy:          {test_acc*100:.2f}% <<<")
         print(f"  >>> {ds_name} Within-1-Class Accuracy: {w1*100:.2f}% <<<")
 
         tf.keras.backend.clear_session()
