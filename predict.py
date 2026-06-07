@@ -88,7 +88,7 @@ def predict(model, classes, crop1, crop2):
     return classes[pred_idx], avg_prob, pred_idx
 
 
-def visualize(stages, predicted_ntu, actual_ntu, dataset, avg_prob, classes):
+def visualize(stages, predicted_ntu, actual_ntu, dataset, avg_prob, classes, save_path=None):
     n_stages = len(stages)
     fig = plt.figure(figsize=(max(18, n_stages * 3), 10))
     gs  = gridspec.GridSpec(2, n_stages, figure=fig, hspace=0.45, wspace=0.3)
@@ -151,7 +151,11 @@ def visualize(stages, predicted_ntu, actual_ntu, dataset, avg_prob, classes):
     fig.suptitle(title, fontsize=13, fontweight="bold", color=title_color)
 
     plt.tight_layout()
-    plt.show()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Visualization saved to: {save_path}")
+    else:
+        plt.show()
 
 
 def main():
@@ -163,6 +167,8 @@ def main():
                         help="Dataset/model to use: Clear_Plastic, Formazine, Kaolin, Text")
     parser.add_argument("--actual", default=None,
                         help="Actual NTU value for accuracy check (e.g. --actual 25)")
+    parser.add_argument("--save",   default=None, metavar="FILE",
+                        help="Save visualization to file instead of showing (e.g. --save out.png)")
     args = parser.parse_args()
 
     # Auto-detect actual NTU from parent folder name if not provided
@@ -192,7 +198,7 @@ def main():
         print(f"  Actual NTU    : {args.actual}")
         print(f"  Result        : {'CORRECT' if match else 'WRONG'}")
 
-    visualize(stages, predicted_ntu, args.actual, args.dataset, avg_prob, classes)
+    visualize(stages, predicted_ntu, args.actual, args.dataset, avg_prob, classes, save_path=args.save)
 
 
 if __name__ == "__main__":
