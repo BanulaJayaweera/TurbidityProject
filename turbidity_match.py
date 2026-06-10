@@ -38,6 +38,7 @@ class TurbidityPreprocessor:
             # Already pre-cropped (244x244): use image directly
             roi = img
 
+        roi = self._sharpen_roi(roi)
         roi_norm = self._normalize_image(roi)
         crop1, crop2 = self._final_crops(roi_norm)
 
@@ -58,7 +59,8 @@ class TurbidityPreprocessor:
         return cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
 
     def _morphological_ops(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        denoised = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
+        gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
         # Auto-detect: if image is mostly bright, dot is dark -> BINARY_INV
         # If image is mostly dark, dot is light -> BINARY
         mean_brightness = np.mean(gray)
@@ -70,6 +72,11 @@ class TurbidityPreprocessor:
         opened  = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,  kernel)
         closed  = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
         return closed
+
+    def _sharpen_roi(self, roi):
+        blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=2)
+        sharpened = cv2.addWeighted(roi, 1.5, blurred, -0.5, 0)
+        return np.clip(sharpened, 0, 255).astype(roi.dtype)
 
     def _get_padded_bounding_box(self, mask, img_shape):
         H, W = img_shape[:2]

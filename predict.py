@@ -62,6 +62,9 @@ def get_stages(image_path, pattern_type):
         roi = img
         stages["Image (pre-cropped)"] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+    roi = processor._sharpen_roi(roi)
+    stages["Sharpened ROI"] = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+
     roi_norm = processor._normalize_image(roi)
     stages["Normalized ROI"] = roi_norm
 
